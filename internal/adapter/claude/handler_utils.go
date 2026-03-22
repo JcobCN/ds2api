@@ -13,28 +13,52 @@ func normalizeClaudeMessages(messages []any) []any {
 		if !ok {
 			continue
 		}
-		copied := cloneMap(msg)
+		role := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", msg["role"])))
 		switch content := msg["content"].(type) {
 		case []any:
-			parts := make([]string, 0, len(content))
+			textParts := make([]string, 0, len(content))
+			flushText := func() {
+				if len(textParts) == 0 {
+					return
+				}
+				out = append(out, map[string]any{
+					"role":    role,
+					"content": strings.Join(textParts, "\n"),
+				})
+				textParts = textParts[:0]
+			}
 			for _, block := range content {
 				b, ok := block.(map[string]any)
 				if !ok {
 					continue
 				}
-				typeStr, _ := b["type"].(string)
-				if typeStr == "text" {
+				typeStr := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", b["type"])))
+				switch typeStr {
+				case "text":
 					if t, ok := b["text"].(string); ok {
-						parts = append(parts, t)
+						textParts = append(textParts, t)
+					}
+				case "tool_use":
+					flushText()
+					if toolMsg := normalizeClaudeToolUseToAssistant(b); toolMsg != nil {
+						out = append(out, toolMsg)
+					}
+				case "tool_result":
+					flushText()
+					if toolMsg := normalizeClaudeToolResultToToolMessage(b); toolMsg != nil {
+						out = append(out, toolMsg)
+					}
+				default:
+					if raw := strings.TrimSpace(formatClaudeBlockRaw(b)); raw != "" {
+						textParts = append(textParts, raw)
 					}
 				}
-				if typeStr == "tool_result" {
-					parts = append(parts, formatClaudeToolResultForPrompt(b))
-				}
 			}
-			copied["content"] = strings.Join(parts, "\n")
+			flushText()
+		default:
+			copied := cloneMap(msg)
+			out = append(out, copied)
 		}
-		out = append(out, copied)
 	}
 	return out
 }
@@ -52,9 +76,8 @@ func buildClaudeToolPrompt(tools []any) string {
 	}
 	parts = append(parts,
 		"When you need a tool, respond with Claude-native tool use (tool_use) using the provided tool schema. Do not print tool-call JSON in text.",
-		"History markers in conversation: [TOOL_CALL_HISTORY]...[/TOOL_CALL_HISTORY] are your previous tool calls; [TOOL_RESULT_HISTORY]...[/TOOL_RESULT_HISTORY] are runtime tool outputs, not user input.",
-		"After a valid [TOOL_RESULT_HISTORY], continue with final answer instead of repeating the same call unless required fields are still missing.",
-		"Never output [TOOL_CALL_HISTORY] or [TOOL_RESULT_HISTORY] markers yourself; they are system-side context only.",
+		"Tool roundtrip context is included directly in the conversation messages (assistant tool_use/tool_calls and tool results).",
+		"After receiving a valid tool result, continue with final answer instead of repeating the same call unless required fields are still missing.",
 	)
 	return strings.Join(parts, "\n\n")
 }
@@ -63,22 +86,94 @@ func formatClaudeToolResultForPrompt(block map[string]any) string {
 	if block == nil {
 		return ""
 	}
+	payload := map[string]any{
+		"type":    "tool_result",
+		"content": block["content"],
+	}
+	if toolCallID := strings.TrimSpace(fmt.Sprintf("%v", block["tool_use_id"])); toolCallID != "" {
+		payload["tool_call_id"] = toolCallID
+	} else if toolCallID := strings.TrimSpace(fmt.Sprintf("%v", block["tool_call_id"])); toolCallID != "" {
+		payload["tool_call_id"] = toolCallID
+	}
+	if name := strings.TrimSpace(fmt.Sprintf("%v", block["name"])); name != "" {
+		payload["name"] = name
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return strings.TrimSpace(fmt.Sprintf("%v", payload))
+	}
+	return string(b)
+}
+
+func normalizeClaudeToolUseToAssistant(block map[string]any) map[string]any {
+	if block == nil {
+		return nil
+	}
+	name := strings.TrimSpace(fmt.Sprintf("%v", block["name"]))
+	if name == "" {
+		return nil
+	}
+	callID := strings.TrimSpace(fmt.Sprintf("%v", block["id"]))
+	if callID == "" {
+		callID = strings.TrimSpace(fmt.Sprintf("%v", block["tool_use_id"]))
+	}
+	if callID == "" {
+		callID = "call_claude"
+	}
+	arguments := block["input"]
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
+	argsJSON, err := json.Marshal(arguments)
+	if err != nil || len(argsJSON) == 0 {
+		argsJSON = []byte("{}")
+	}
+	return map[string]any{
+		"role": "assistant",
+		"tool_calls": []any{
+			map[string]any{
+				"id":   callID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      name,
+					"arguments": string(argsJSON),
+				},
+			},
+		},
+	}
+}
+
+func normalizeClaudeToolResultToToolMessage(block map[string]any) map[string]any {
+	if block == nil {
+		return nil
+	}
 	toolCallID := strings.TrimSpace(fmt.Sprintf("%v", block["tool_use_id"]))
 	if toolCallID == "" {
 		toolCallID = strings.TrimSpace(fmt.Sprintf("%v", block["tool_call_id"]))
 	}
 	if toolCallID == "" {
-		toolCallID = "unknown"
+		toolCallID = "call_claude"
 	}
-	name := strings.TrimSpace(fmt.Sprintf("%v", block["name"]))
-	if name == "" {
-		name = "unknown"
+	out := map[string]any{
+		"role":         "tool",
+		"tool_call_id": toolCallID,
+		"content":      block["content"],
 	}
-	content := strings.TrimSpace(fmt.Sprintf("%v", block["content"]))
-	if content == "" {
-		content = "null"
+	if name := strings.TrimSpace(fmt.Sprintf("%v", block["name"])); name != "" {
+		out["name"] = name
 	}
-	return fmt.Sprintf("[TOOL_RESULT_HISTORY]\nstatus: already_returned\norigin: tool_runtime\nnot_user_input: true\ntool_call_id: %s\nname: %s\ncontent: %s\n[/TOOL_RESULT_HISTORY]", toolCallID, name, content)
+	return out
+}
+
+func formatClaudeBlockRaw(block map[string]any) string {
+	if block == nil {
+		return ""
+	}
+	b, err := json.Marshal(block)
+	if err != nil {
+		return strings.TrimSpace(fmt.Sprintf("%v", block))
+	}
+	return string(b)
 }
 
 func hasSystemMessage(messages []any) bool {

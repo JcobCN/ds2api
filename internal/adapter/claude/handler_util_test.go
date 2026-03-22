@@ -1,7 +1,6 @@
 package claude
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -48,10 +47,49 @@ func TestNormalizeClaudeMessagesToolResult(t *testing.T) {
 		},
 	}
 	got := normalizeClaudeMessages(msgs)
+	if len(got) != 1 {
+		t.Fatalf("expected one normalized message, got %d", len(got))
+	}
 	m := got[0].(map[string]any)
+	if m["role"] != "tool" {
+		t.Fatalf("expected tool role preserved, got %#v", m["role"])
+	}
 	content, _ := m["content"].(string)
-	if !strings.Contains(content, "[TOOL_RESULT_HISTORY]") || !strings.Contains(content, "content: tool output") {
-		t.Fatalf("expected serialized tool result marker, got %q", content)
+	if content != "tool output" {
+		t.Fatalf("expected raw tool output content preserved, got %q", content)
+	}
+}
+
+func TestNormalizeClaudeMessagesToolUseToAssistantToolCalls(t *testing.T) {
+	msgs := []any{
+		map[string]any{
+			"role": "assistant",
+			"content": []any{
+				map[string]any{
+					"type":  "tool_use",
+					"id":    "call_1",
+					"name":  "search_web",
+					"input": map[string]any{"query": "latest"},
+				},
+			},
+		},
+	}
+
+	got := normalizeClaudeMessages(msgs)
+	if len(got) != 1 {
+		t.Fatalf("expected one normalized tool-call message, got %d", len(got))
+	}
+	m := got[0].(map[string]any)
+	if m["role"] != "assistant" {
+		t.Fatalf("expected assistant role, got %#v", m["role"])
+	}
+	tc, _ := m["tool_calls"].([]any)
+	if len(tc) != 1 {
+		t.Fatalf("expected one tool call, got %#v", m["tool_calls"])
+	}
+	call, _ := tc[0].(map[string]any)
+	if call["id"] != "call_1" {
+		t.Fatalf("expected call id preserved, got %#v", call)
 	}
 }
 
@@ -94,8 +132,9 @@ func TestNormalizeClaudeMessagesMixedContentBlocks(t *testing.T) {
 	}
 	got := normalizeClaudeMessages(msgs)
 	m := got[0].(map[string]any)
-	if m["content"] != "Hello\nWorld" {
-		t.Fatalf("expected only text parts joined, got %q", m["content"])
+	content, _ := m["content"].(string)
+	if !containsStr(content, "Hello") || !containsStr(content, "World") || !containsStr(content, `"type":"image"`) {
+		t.Fatalf("expected text plus raw non-text block preserved, got %q", content)
 	}
 }
 
@@ -128,11 +167,11 @@ func TestBuildClaudeToolPromptSingleTool(t *testing.T) {
 	if !containsStr(prompt, "tool_use") {
 		t.Fatalf("expected tool_use instruction in prompt")
 	}
-	if !containsStr(prompt, "Never output [TOOL_CALL_HISTORY] or [TOOL_RESULT_HISTORY] markers yourself") {
-		t.Fatalf("expected marker guard instruction in prompt")
+	if containsStr(prompt, "TOOL_CALL_HISTORY") || containsStr(prompt, "TOOL_RESULT_HISTORY") {
+		t.Fatalf("expected legacy tool history markers removed from prompt")
 	}
-	if containsStr(prompt, "tool_calls") {
-		t.Fatalf("expected prompt to avoid tool_calls JSON instruction")
+	if !containsStr(prompt, "Do not print tool-call JSON in text") {
+		t.Fatalf("expected prompt to keep no tool-call-json instruction")
 	}
 }
 

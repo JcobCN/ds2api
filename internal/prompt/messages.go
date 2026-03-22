@@ -36,6 +36,12 @@ func MessagesPrepare(messages []map[string]any) string {
 		switch m.Role {
 		case "assistant":
 			parts = append(parts, "<｜Assistant｜>"+m.Text+"<｜end▁of▁sentence｜>")
+		case "tool":
+			if i > 0 {
+				parts = append(parts, "<｜Tool｜>"+m.Text)
+			} else {
+				parts = append(parts, m.Text)
+			}
 		case "user", "system":
 			if i > 0 {
 				parts = append(parts, "<｜User｜>"+m.Text)

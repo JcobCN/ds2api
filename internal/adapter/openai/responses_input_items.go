@@ -19,6 +19,27 @@ func normalizeResponsesInputItemWithState(m map[string]any, callNameByID map[str
 
 	role := strings.ToLower(strings.TrimSpace(asString(m["role"])))
 	if role != "" {
+		if role == "assistant" {
+			out := map[string]any{
+				"role": "assistant",
+			}
+			if toolCalls, ok := m["tool_calls"].([]any); ok && len(toolCalls) > 0 {
+				out["tool_calls"] = toolCalls
+			}
+			content := m["content"]
+			if content == nil {
+				if txt, _ := m["text"].(string); strings.TrimSpace(txt) != "" {
+					content = txt
+				}
+			}
+			if content != nil {
+				out["content"] = content
+			}
+			if _, hasToolCalls := out["tool_calls"]; hasToolCalls || out["content"] != nil {
+				return out
+			}
+			return nil
+		}
 		content := m["content"]
 		if content == nil {
 			if txt, _ := m["text"].(string); strings.TrimSpace(txt) != "" {
@@ -28,10 +49,22 @@ func normalizeResponsesInputItemWithState(m map[string]any, callNameByID map[str
 		if content == nil {
 			return nil
 		}
-		return map[string]any{
+		out := map[string]any{
 			"role":    normalizeOpenAIRoleForPrompt(role),
 			"content": content,
 		}
+		if role == "tool" || role == "function" {
+			if callID := strings.TrimSpace(asString(m["tool_call_id"])); callID != "" {
+				out["tool_call_id"] = callID
+			}
+			if callID := strings.TrimSpace(asString(m["call_id"])); callID != "" {
+				out["tool_call_id"] = callID
+			}
+			if name := strings.TrimSpace(asString(m["name"])); name != "" {
+				out["name"] = name
+			}
+		}
+		return out
 	}
 
 	itemType := strings.ToLower(strings.TrimSpace(asString(m["type"])))

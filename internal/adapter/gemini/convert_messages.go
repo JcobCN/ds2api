@@ -107,6 +107,11 @@ func geminiMessagesFromRequest(req map[string]any) []any {
 					msg["name"] = name
 				}
 				out = append(out, msg)
+				continue
+			}
+
+			if raw := strings.TrimSpace(stringifyJSON(part)); raw != "" && raw != "null" {
+				textParts = append(textParts, raw)
 			}
 		}
 		flushText()
