@@ -42,12 +42,15 @@ func MessagesPrepare(messages []map[string]any) string {
 			} else {
 				parts = append(parts, m.Text)
 			}
-		case "user", "system":
-			if i > 0 {
-				parts = append(parts, "<｜User｜>"+m.Text)
-			} else {
-				parts = append(parts, m.Text)
+		case "system":
+			// Clear system boundary improves R1 and V3 context understanding significantly
+			if strings.TrimSpace(m.Text) != "" {
+				parts = append(parts, "<system_instructions>\n"+strings.TrimSpace(m.Text)+"\n</system_instructions>\n\n")
 			}
+		case "user":
+			// Always prepend <｜User｜> to user messages. DeepSeek R1 reasoning triggers best
+			// and aligns context perfectly when the user turn is explicitly marked.
+			parts = append(parts, "<｜User｜>"+m.Text)
 		default:
 			parts = append(parts, m.Text)
 		}
