@@ -290,16 +290,17 @@ func IsCitation(text string) bool {
 }
 
 func hasContentFilterStatus(chunk map[string]any) bool {
-	return hasContentFilterValue(chunk)
+	if code, _ := chunk["code"].(string); strings.EqualFold(strings.TrimSpace(code), "content_filter") {
+		return true
+	}
+	return hasContentFilterStatusValue(chunk)
 }
 
-func hasContentFilterValue(v any) bool {
+func hasContentFilterStatusValue(v any) bool {
 	switch x := v.(type) {
-	case string:
-		return strings.EqualFold(strings.TrimSpace(x), "content_filter")
 	case []any:
 		for _, item := range x {
-			if hasContentFilterValue(item) {
+			if hasContentFilterStatusValue(item) {
 				return true
 			}
 		}
@@ -309,8 +310,11 @@ func hasContentFilterValue(v any) bool {
 				return true
 			}
 		}
+		if code, _ := x["code"].(string); strings.EqualFold(strings.TrimSpace(code), "content_filter") {
+			return true
+		}
 		for _, vv := range x {
-			if hasContentFilterValue(vv) {
+			if hasContentFilterStatusValue(vv) {
 				return true
 			}
 		}

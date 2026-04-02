@@ -190,7 +190,10 @@ func (s *chatStreamRuntime) onParsed(parsed sse.LineResult) streamengine.ParsedD
 	if parsed.OutputTokens > 0 {
 		s.outputTokens = parsed.OutputTokens
 	}
-	if parsed.ContentFilter || parsed.ErrorMessage != "" {
+	if parsed.ContentFilter {
+		return streamengine.ParsedDecision{Stop: true, StopReason: streamengine.StopReasonHandlerRequested}
+	}
+	if parsed.ErrorMessage != "" {
 		return streamengine.ParsedDecision{Stop: true, StopReason: streamengine.StopReason("content_filter")}
 	}
 	if parsed.Stop {

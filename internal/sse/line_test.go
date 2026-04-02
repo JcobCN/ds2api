@@ -26,6 +26,19 @@ func TestParseDeepSeekContentLineContentFilter(t *testing.T) {
 	}
 }
 
+func TestParseDeepSeekContentLineContentFilterCodeIncludesOutputTokens(t *testing.T) {
+	res := ParseDeepSeekContentLine(
+		[]byte(`data: {"code":"content_filter","accumulated_token_usage":99}`),
+		false, "text",
+	)
+	if !res.Parsed || !res.Stop || !res.ContentFilter {
+		t.Fatalf("expected content-filter stop result: %#v", res)
+	}
+	if res.OutputTokens != 99 {
+		t.Fatalf("expected output token usage 99, got %d", res.OutputTokens)
+	}
+}
+
 func TestParseDeepSeekContentLineContentFilterStatus(t *testing.T) {
 	res := ParseDeepSeekContentLine([]byte(`data: {"p":"response/status","v":"CONTENT_FILTER"}`), false, "text")
 	if !res.Parsed || !res.Stop || !res.ContentFilter {
@@ -77,5 +90,15 @@ func TestParseDeepSeekContentLineTrimsFromContentFilterKeyword(t *testing.T) {
 	}
 	if len(res.Parts) != 1 || res.Parts[0].Text != "模型会在命中" {
 		t.Fatalf("unexpected parts after filter: %#v", res.Parts)
+	}
+}
+
+func TestParseDeepSeekContentLineContentTextEqualContentFilterDoesNotStop(t *testing.T) {
+	res := ParseDeepSeekContentLine([]byte(`data: {"p":"response/content","v":"content_filter"}`), false, "text")
+	if !res.Parsed {
+		t.Fatalf("expected parsed result: %#v", res)
+	}
+	if res.Stop || res.ContentFilter {
+		t.Fatalf("did not expect content-filter stop for content text: %#v", res)
 	}
 }

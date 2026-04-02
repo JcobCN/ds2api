@@ -183,3 +183,53 @@ func TestResponsesNonStreamMixedProseToolPayloadHandlerPath(t *testing.T) {
 		t.Fatalf("expected function_call output item, got %#v", output)
 	}
 }
+
+func TestChatCompletionsStreamContentFilterStopsNormallyWithoutLeak(t *testing.T) {
+	statuses := make([]int, 0, 1)
+	h := &Handler{
+		Store: mockOpenAIConfig{wideInput: true},
+		Auth:  streamStatusAuthStub{},
+		DS: streamStatusDSStub{resp: makeOpenAISSEHTTPResponse(
+			`data: {"p":"response/content","v":"合法前缀"}`,
+			`data: {"p":"response/status","v":"CONTENT_FILTER","accumulated_token_usage":77}`,
+			`data: {"p":"response/content","v":"CONTENT_FILTER你好，这个问题我暂时无法回答，让我们换个话题再聊聊吧。"}`,
+		)},
+	}
+	r := chi.NewRouter()
+	r.Use(captureStatusMiddleware(&statuses))
+	RegisterRoutes(r, h)
+
+	reqBody := `{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
+	req.Header.Set("Authorization", "Bearer direct-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(statuses) != 1 || statuses[0] != http.StatusOK {
+		t.Fatalf("expected captured status 200, got %#v", statuses)
+	}
+	if strings.Contains(rec.Body.String(), "这个问题我暂时无法回答") {
+		t.Fatalf("expected leaked content-filter suffix to be hidden, body=%s", rec.Body.String())
+	}
+
+	frames, done := parseSSEDataFrames(t, rec.Body.String())
+	if !done {
+		t.Fatalf("expected [DONE], body=%s", rec.Body.String())
+	}
+	if len(frames) == 0 {
+		t.Fatalf("expected at least one json frame, body=%s", rec.Body.String())
+	}
+	last := frames[len(frames)-1]
+	choices, _ := last["choices"].([]any)
+	if len(choices) != 1 {
+		t.Fatalf("expected one choice in final frame, got %#v", last)
+	}
+	choice, _ := choices[0].(map[string]any)
+	if choice["finish_reason"] != "stop" {
+		t.Fatalf("expected finish_reason=stop for content-filter upstream stop, got %#v", choice["finish_reason"])
+	}
+}

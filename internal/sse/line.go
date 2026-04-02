@@ -36,8 +36,8 @@ func ParseDeepSeekContentLine(raw []byte, thinkingEnabled bool, currentType stri
 			Parsed:        true,
 			Stop:          true,
 			ContentFilter: true,
-			ErrorMessage:  "content filtered by upstream",
 			NextType:      currentType,
+			OutputTokens:  extractAccumulatedTokenUsage(chunk),
 		}
 	}
 	if hasContentFilterStatus(chunk) {
@@ -45,7 +45,6 @@ func ParseDeepSeekContentLine(raw []byte, thinkingEnabled bool, currentType stri
 			Parsed:        true,
 			Stop:          true,
 			ContentFilter: true,
-			ErrorMessage:  "content filtered by upstream",
 			NextType:      currentType,
 			OutputTokens:  extractAccumulatedTokenUsage(chunk),
 		}
