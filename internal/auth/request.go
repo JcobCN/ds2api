@@ -25,6 +25,7 @@ var (
 
 type RequestAuth struct {
 	UseConfigToken bool
+	UsePluginToken bool
 	DeepSeekToken  string
 	CallerID       string
 	AccountID      string
@@ -36,12 +37,20 @@ type RequestAuth struct {
 type LoginFunc func(ctx context.Context, acc config.Account) (string, error)
 
 type Resolver struct {
-	Store *config.Store
-	Pool  *account.Pool
-	Login LoginFunc
+	Store  *config.Store
+	Pool   *account.Pool
+	Login  LoginFunc
+	Plugin PluginAccountStore
 
 	mu               sync.Mutex
 	tokenRefreshedAt map[string]time.Time
+}
+
+type PluginAccountStore interface {
+	MatchAPIKey(candidate string) bool
+	GetAccount() (config.Account, bool)
+	UpdateAccountToken(token string) error
+	ClearToken() error
 }
 
 func NewResolver(store *config.Store, pool *account.Pool, login LoginFunc) *Resolver {
@@ -53,6 +62,10 @@ func NewResolver(store *config.Store, pool *account.Pool, login LoginFunc) *Reso
 	}
 }
 
+func (r *Resolver) SetPluginStore(store PluginAccountStore) {
+	r.Plugin = store
+}
+
 func (r *Resolver) Determine(req *http.Request) (*RequestAuth, error) {
 	callerKey := extractCallerToken(req)
 	if callerKey == "" {
@@ -60,6 +73,24 @@ func (r *Resolver) Determine(req *http.Request) (*RequestAuth, error) {
 	}
 	callerID := callerTokenID(callerKey)
 	ctx := req.Context()
+	if r.Plugin != nil && r.Plugin.MatchAPIKey(callerKey) {
+		acc, ok := r.Plugin.GetAccount()
+		if !ok {
+			return nil, ErrNoAccount
+		}
+		a := &RequestAuth{
+			UsePluginToken: true,
+			CallerID:       callerID,
+			AccountID:      "plugin",
+			Account:        acc,
+			TriedAccounts:  map[string]bool{},
+			resolver:       r,
+		}
+		if err := r.ensureManagedToken(ctx, a); err != nil {
+			return nil, err
+		}
+		return a, nil
+	}
 	if !r.Store.HasAPIKey(callerKey) {
 		return &RequestAuth{
 			UseConfigToken: false,
@@ -127,14 +158,21 @@ func (r *Resolver) loginAndPersist(ctx context.Context, a *RequestAuth) error {
 	a.Account.Token = token
 	a.DeepSeekToken = token
 	r.markTokenRefreshedNow(a.AccountID)
+	if a.UsePluginToken {
+		return r.Plugin.UpdateAccountToken(token)
+	}
 	return r.Store.UpdateAccountToken(a.AccountID, token)
 }
 
 func (r *Resolver) RefreshToken(ctx context.Context, a *RequestAuth) bool {
-	if !a.UseConfigToken || a.AccountID == "" {
+	if (!a.UseConfigToken && !a.UsePluginToken) || a.AccountID == "" {
 		return false
 	}
-	_ = r.Store.UpdateAccountToken(a.AccountID, "")
+	if a.UsePluginToken {
+		_ = r.Plugin.ClearToken()
+	} else {
+		_ = r.Store.UpdateAccountToken(a.AccountID, "")
+	}
 	a.Account.Token = ""
 	if err := r.loginAndPersist(ctx, a); err != nil {
 		config.Logger.Error("[refresh_token] failed", "account", a.AccountID, "error", err)
@@ -144,17 +182,21 @@ func (r *Resolver) RefreshToken(ctx context.Context, a *RequestAuth) bool {
 }
 
 func (r *Resolver) MarkTokenInvalid(a *RequestAuth) {
-	if !a.UseConfigToken || a.AccountID == "" {
+	if (!a.UseConfigToken && !a.UsePluginToken) || a.AccountID == "" {
 		return
 	}
 	a.Account.Token = ""
 	a.DeepSeekToken = ""
 	r.clearTokenRefreshMark(a.AccountID)
+	if a.UsePluginToken {
+		_ = r.Plugin.ClearToken()
+		return
+	}
 	_ = r.Store.UpdateAccountToken(a.AccountID, "")
 }
 
 func (r *Resolver) SwitchAccount(ctx context.Context, a *RequestAuth) bool {
-	if !a.UseConfigToken {
+	if !a.UseConfigToken || a.UsePluginToken {
 		return false
 	}
 	if a.TriedAccounts == nil {
@@ -177,7 +219,7 @@ func (r *Resolver) SwitchAccount(ctx context.Context, a *RequestAuth) bool {
 }
 
 func (r *Resolver) Release(a *RequestAuth) {
-	if a == nil || !a.UseConfigToken || a.AccountID == "" {
+	if a == nil || !a.UseConfigToken || a.UsePluginToken || a.AccountID == "" {
 		return
 	}
 	r.Pool.Release(a.AccountID)

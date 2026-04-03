@@ -68,6 +68,65 @@ func TestDetermineWithXAPIKeyManagedKeyAcquiresAccount(t *testing.T) {
 	}
 }
 
+func TestDetermineWithPluginKeyUsesPluginAccount(t *testing.T) {
+	store := &testPluginStore{
+		apiKey: "dsplug_test",
+		account: config.Account{
+			Email:    "plugin@example.com",
+			Password: "pwd",
+			Token:    "plugin-token",
+		},
+	}
+
+	r := newTestResolver(t)
+	r.SetPluginStore(store)
+	req, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("Authorization", "Bearer "+store.apiKey)
+
+	a, err := r.Determine(req)
+	if err != nil {
+		t.Fatalf("determine failed: %v", err)
+	}
+	if !a.UsePluginToken {
+		t.Fatalf("expected plugin-token mode")
+	}
+	if a.UseConfigToken {
+		t.Fatalf("did not expect managed pool mode")
+	}
+	if a.DeepSeekToken != "plugin-token" {
+		t.Fatalf("unexpected plugin token: %q", a.DeepSeekToken)
+	}
+	if a.AccountID != "plugin" {
+		t.Fatalf("unexpected account id: %q", a.AccountID)
+	}
+}
+
+type testPluginStore struct {
+	apiKey  string
+	account config.Account
+}
+
+func (s *testPluginStore) MatchAPIKey(candidate string) bool {
+	return candidate == s.apiKey
+}
+
+func (s *testPluginStore) GetAccount() (config.Account, bool) {
+	if s.account.Identifier() == "" {
+		return config.Account{}, false
+	}
+	return s.account, true
+}
+
+func (s *testPluginStore) UpdateAccountToken(token string) error {
+	s.account.Token = token
+	return nil
+}
+
+func (s *testPluginStore) ClearToken() error {
+	s.account.Token = ""
+	return nil
+}
+
 func TestDetermineCallerWithManagedKeySkipsAccountAcquire(t *testing.T) {
 	r := newTestResolver(t)
 	req, _ := http.NewRequest(http.MethodGet, "/v1/responses/resp_1", nil)

@@ -40,3 +40,7 @@ func WASMPath() string {
 func StaticAdminDir() string {
 	return ResolvePath("DS2API_STATIC_ADMIN_DIR", "static/admin")
 }
+
+func PluginStatePath() string {
+	return ResolvePath("DS2API_PLUGIN_STATE_PATH", ".ds-coder/plugin-state.json")
+}

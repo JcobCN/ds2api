@@ -18,6 +18,7 @@ import (
 	"ds2api/internal/auth"
 	"ds2api/internal/config"
 	"ds2api/internal/deepseek"
+	"ds2api/internal/plugin"
 	"ds2api/internal/webui"
 )
 
@@ -26,16 +27,19 @@ type App struct {
 	Pool     *account.Pool
 	Resolver *auth.Resolver
 	DS       *deepseek.Client
+	Plugin   *plugin.Store
 	Router   http.Handler
 }
 
 func NewApp() *App {
 	store := config.LoadStore()
+	pluginStore := plugin.LoadStore()
 	pool := account.NewPool(store)
 	var dsClient *deepseek.Client
 	resolver := auth.NewResolver(store, pool, func(ctx context.Context, acc config.Account) (string, error) {
 		return dsClient.Login(ctx, acc)
 	})
+	resolver.SetPluginStore(pluginStore)
 	dsClient = deepseek.NewClient(store, resolver)
 	if err := dsClient.PreloadPow(context.Background()); err != nil {
 		config.Logger.Warn("[WASM] preload failed", "error", err)
@@ -47,6 +51,7 @@ func NewApp() *App {
 	claudeHandler := &claude.Handler{Store: store, Auth: resolver, DS: dsClient}
 	geminiHandler := &gemini.Handler{Store: store, Auth: resolver, DS: dsClient}
 	adminHandler := &admin.Handler{Store: store, Pool: pool, DS: dsClient}
+	pluginHandler := &plugin.Handler{Store: pluginStore, DS: dsClient}
 	webuiHandler := webui.NewHandler()
 
 	r := chi.NewRouter()
@@ -77,6 +82,9 @@ func NewApp() *App {
 	r.Route("/admin", func(ar chi.Router) {
 		admin.RegisterRoutes(ar, adminHandler)
 	})
+	r.Route("/plugin", func(pr chi.Router) {
+		plugin.RegisterRoutes(pr, pluginHandler)
+	})
 	webui.RegisterRoutes(r, webuiHandler)
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		if strings.HasPrefix(req.URL.Path, "/admin/") && webuiHandler.HandleAdminFallback(w, req) {
@@ -85,7 +93,7 @@ func NewApp() *App {
 		http.NotFound(w, req)
 	})
 
-	return &App{Store: store, Pool: pool, Resolver: resolver, DS: dsClient, Router: r}
+	return &App{Store: store, Pool: pool, Resolver: resolver, DS: dsClient, Plugin: pluginStore, Router: r}
 }
 
 func timeout(d time.Duration) func(http.Handler) http.Handler {

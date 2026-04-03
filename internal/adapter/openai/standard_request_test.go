@@ -36,8 +36,31 @@ func TestNormalizeOpenAIChatRequest(t *testing.T) {
 	if _, ok := n.PassThrough["temperature"]; !ok {
 		t.Fatalf("expected temperature passthrough")
 	}
+	if _, ok := n.PassThrough["chat_session_id"]; ok {
+		t.Fatalf("did not expect chat_session_id passthrough by default")
+	}
 	if n.FinalPrompt == "" {
 		t.Fatalf("expected non-empty final prompt")
+	}
+}
+
+func TestNormalizeOpenAIChatRequestSessionContinuationPassThrough(t *testing.T) {
+	store := newEmptyStoreForNormalizeTest(t)
+	req := map[string]any{
+		"model":             "deepseek-chat",
+		"messages":          []any{map[string]any{"role": "user", "content": "hello"}},
+		"chat_session_id":   "session_123",
+		"parent_message_id": "message_456",
+	}
+	n, err := normalizeOpenAIChatRequest(store, req, "")
+	if err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	if got := n.PassThrough["chat_session_id"]; got != "session_123" {
+		t.Fatalf("expected chat_session_id passthrough, got %#v", got)
+	}
+	if got := n.PassThrough["parent_message_id"]; got != "message_456" {
+		t.Fatalf("expected parent_message_id passthrough, got %#v", got)
 	}
 }
 

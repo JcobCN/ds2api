@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"ds2api/internal/auth"
@@ -35,13 +36,14 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, status, detail)
 		return
 	}
+	shouldAutoDelete := false
 	defer func() {
 		// 自动删除会话（同步）
 		// 必须在 Release 之前同步删除，否则：
 		// 1. 异步删除时账号已被 Release
 		// 2. 新请求可能获取到同一账号并开始使用
 		// 3. 异步删除仍在进行，会截断新请求正在使用的会话
-		if h.Store.AutoDeleteSessions() && a.DeepSeekToken != "" {
+		if shouldAutoDelete && a.DeepSeekToken != "" {
 			deleteCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 			defer cancel()
 			err := h.DS.DeleteAllSessionsForToken(deleteCtx, a.DeepSeekToken)
@@ -66,15 +68,18 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-
-	sessionID, err := h.DS.CreateSession(r.Context(), a, 3)
-	if err != nil {
-		if a.UseConfigToken {
-			writeOpenAIError(w, http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.")
-		} else {
-			writeOpenAIError(w, http.StatusUnauthorized, "Invalid token. If this should be a DS2API key, add it to config.keys first.")
+	shouldAutoDelete = h.Store.AutoDeleteSessions() && !a.UsePluginToken
+	sessionID := strings.TrimSpace(asString(stdReq.PassThrough["chat_session_id"]))
+	if sessionID == "" {
+		sessionID, err = h.DS.CreateSession(r.Context(), a, 3)
+		if err != nil {
+			if a.UseConfigToken {
+				writeOpenAIError(w, http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.")
+			} else {
+				writeOpenAIError(w, http.StatusUnauthorized, "Invalid token. If this should be a DS2API key, add it to config.keys first.")
+			}
+			return
 		}
-		return
 	}
 	pow, err := h.DS.GetPow(r.Context(), a, 3)
 	if err != nil {
