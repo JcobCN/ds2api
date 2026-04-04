@@ -25,13 +25,23 @@ func main() {
 	if port == "" {
 		port = "5001"
 	}
+	host := strings.TrimSpace(os.Getenv("DS2API_HOST"))
+	if host == "" {
+		host = strings.TrimSpace(os.Getenv("HOST"))
+	}
+	if host == "" {
+		host = "0.0.0.0"
+	}
 
 	srv := &http.Server{
-		Addr:    "0.0.0.0:" + port,
+		Addr:    net.JoinHostPort(host, port),
 		Handler: app.Router,
 	}
 	localURL := fmt.Sprintf("http://127.0.0.1:%s", port)
-	lanIP := detectLANIPv4()
+	lanIP := ""
+	if host == "0.0.0.0" || host == "::" || host == "" {
+		lanIP = detectLANIPv4()
+	}
 	lanURL := ""
 	if lanIP != "" {
 		lanURL = fmt.Sprintf("http://%s:%s", lanIP, port)
